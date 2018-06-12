@@ -1,0 +1,43 @@
+# desc
+#
+# include:
+#   - fname1
+#   - fname2
+#
+# macros:
+#   name: text // (will replace macro) referenced with (($
+#
+# host:
+#   [hostname (human readable / for reports]:
+#     ip: [ip]
+#     user: <username // @ shortcut for localuser // default root>
+#     password: <ssh password>
+#     sudo: <sudo username // default nil>
+#     wants:
+#       - <tasks>
+#       - [<tasks>, <%ARG0%>, <%ARG1%>] // ARGs will be used by tasks
+#       - [<tasks>, [[<%ARG0%>, <%ARG1%>], [<%ARG0%>, <%ARG1%>]], <%ARG2%>] // task will be executed for each combination of args
+#       ...
+#
+# tasks:
+#   [taskname (human readable / for reports]:
+#     <subtask (atm: prep, install, config (in that order))>:
+#       <state // will be checked before runing commands - if omited commands will always be run>: [cmd]
+#       [pre]: // 1st exec phase, will be run before cp
+#         <command>
+#         <command> %ARG0% %ARG1%
+#       [cp]: // will also be used for state checking
+#         <local_fname>:
+#           to: <remote_fname>
+#           own: [chown_to] (@ shortcut for hostdesc[user])
+#           mod: [chmod_to]
+#       [post]: // 2nd exec phase, will be run after cp
+#         <command>
+#         <command> %ARG0% %ARG1%
+#       <flags>:
+#         - :will_lose_connection // dont raise if connection is lost (f.e.  after reboot / must be last command in subtask)
+#         - :sleep_{10,30,60} // sleep for 10s after task (f.e. to wait till the sys is up again
+#
+
+---
+# vim: syntax=yaml ts=2 sw=2 expandtab

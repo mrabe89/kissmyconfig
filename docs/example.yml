@@ -1,0 +1,49 @@
+---
+include:
+  - lib/arch_base.inc.yml
+
+
+hosts:
+  hostname:
+    ip: hostname.com
+    password: abc
+    wants:
+      # [taskname, options]
+      - [set_hostname, hostname.com]
+      - [set_locale, en_US.UTF-8, de, Europe/Berlin]
+      - apache2
+
+  hostname.user:
+    ip: hostname.com
+    user: "@" # localuser
+    # no password -> ssh key will be used
+    wants:
+      - vimrc
+
+
+tasks:
+  apache2:
+    install:
+      # if state check fails, task will be executed in order: pre, cp, post
+      # every file in the cp section will also be handled as a state check
+      # if no state check is specified, task will be executed every time
+      state: test -e /usr/bin/apachectl
+      # pacman macro turns into -> pacman -Syu (see lib/arch_base.inc.yml)
+      pre: (($pacman apache php php-apache
+      post:
+        - systemctl enable httpd.service
+        - systemctl start httpd.service
+    config:
+      pre: systemctl stop httpd.service
+      cp:
+        apache2/httpd.conf:        [ /etc/httpd/conf/httpd.conf,              "root:root", 644 ]
+        apache2/httpd-vhosts.conf: [ /etc/httpd/conf/extra/httpd-vhosts.conf, "root:root", 644 ]
+        apache2/php.ini:           [ /etc/php/php.ini,                        "root:root", 644 ]
+      post: systemctl start httpd.service
+
+  vimrc:
+    config:
+      cp:
+        vim/vimrc: [ ~/.vimrc, "@", 644 ]
+
+# vim: syntax=yaml ts=2 sw=2 expandtab
