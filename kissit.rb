@@ -31,6 +31,74 @@ $gvars = {verbose: false, force: false, verify: true, record: false, debug_tasks
 $desc = nil
 $default_subtasks = "prep:install:config"
 
+# class
+class KissIt
+end
+
+class KissItHost < KissIt
+	def hostname;	return @cfg[:hostname];	end
+	def ip;		return @cfg[:ip];	end
+	def password;	return @cfg[:password];	end
+	def user;	return @cfg[:user];	end
+	def sudo;	return @cfg[:sudo];	end
+	def wants;	return @wants;		end
+
+	def set(hostname, hostdesc)
+		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
+		@wants = []
+		@ssh = nil
+
+		raise "#{hostname} ip missing or not a string" if hostdesc["ip"].class != String
+
+		hostdesc.each {|hostdefname, hostdefval|
+			case hostdefname
+			when "ip", "password", "user", "sudo"
+				raise "#{hostname} #{hostdefname} is not a string" if hostdefval.class != String
+				case hostdefname
+				when "ip"	then @cfg[:ip]		= hostdefval
+				when "password"	then @cfg[:password]	= hostdefval
+				when "user"	then @cfg[:user]	= (hostdefval == "@" ? `whoami`.strip : hostdefval)
+				when "sudo"	then @cfg[:sudo]	= hostdefval
+				end
+			when "wants"
+				hostdefval = [hostdefval] if hostdefval.class != Array
+				hostdefval.each_with_index {|w, i|
+					@wants.push(w.class != Array ? [w] : w)
+				}
+			when "nowants"
+				# isnt handled so its not validated
+			else
+				raise "hostdefname #{hostdefname} not allowed in (in #{hostname})"
+			end
+		}
+
+		return self
+	end
+
+	def ssh
+		connect() if @ssh.nil?
+		return @ssh
+	end
+
+	def connect()
+		@ssh = Net::SSH.start(@cfg[:ip], @cfg[:user] || "root", password: @cfg[:password])
+	end
+
+	def disconnect()
+		@ssh.close
+		@ssh = nil
+	end
+end
+
+class KissItTask < KissIt
+end
+
+class KissItConnection < KissIt
+end
+
+class KissItConnectionSSH < KissItConnection
+end
+
 # func
 def usage(ex= nil)
 	$stderr.puts "Usage: #{$0} [options] descfile <hostname or *> <task or *> <subtasks>"
@@ -122,29 +190,7 @@ def validate_yml(desc)
 
 	desc["hosts"].each {|hostname, hostdesc|
 		next if hostdesc.nil?
-
-		raise "#{hostname} ip missing or not a string" if hostdesc["ip"].class != String
-
-		hostdesc.each {|hostdefname, hostdefval|
-			case hostdefname
-			when "ip", "password", "user"
-				raise "#{hostname} #{hostdefname} is not a string" if hostdefval.class != String
-				hostdefval = `whoami`.strip if hostdefname == "user" and hostdefval == "@"
-			when "wants"
-				hostdefval = [hostdefval] if hostdefval.class != Array
-				hostdefval.each_with_index {|w, i|
-					hostdefval[i] = [w] if w.class != Array
-				}
-			when "nowants"
-				# isnt handled so its not validated
-			else
-				raise "hostdefname #{hostdefname} not allowed in (in #{hostname})"
-			end
-
-			hostdesc[hostdefname] = hostdefval
-		}
-
-		desc["hosts"][hostname] = hostdesc
+		desc["hosts"][hostname] = KissItHost.new.set(hostname, hostdesc)
 	}
 
 	desc["tasks"].each {|taskname, taskdesc|
@@ -199,20 +245,20 @@ def hndl_desc()
 	end
 end
 
-def hndl_host(name, desc)
+def hndl_host(name, host)
 	$stderr.puts "## HOST: #{name}"
 
-	desc[:ssh] = Net::SSH.start(desc["ip"], desc["user"] || "root", password: desc["password"])
+	host.connect()
 
 	if $gvars[:taskname] != "*"
-		hndl_task(name, desc, $gvars[:taskname])
+		hndl_task(name, host, $gvars[:taskname])
 	else
-		desc["wants"].to_a.each {|taskname|
-			hndl_task(name, desc, taskname[0], taskname[1..-1])
+		host.wants.to_a.each {|taskname|
+			hndl_task(name, host, taskname[0], taskname[1..-1])
 		}
 	end
 
-	desc[:ssh].close
+	host.disconnect()
 end
 
 def hndl_task(hostname, hostdesc, taskname, args = [])
@@ -231,7 +277,7 @@ def hndl_task(hostname, hostdesc, taskname, args = [])
 end
 
 def hndl_task_do(hostname, hostdesc, taskname, args = [])
-	t = {task: $desc["tasks"][taskname], taskname: taskname, args: args, host: hostdesc, hostname: hostname, ssh: hostdesc[:ssh]}
+	t = {task: $desc["tasks"][taskname], taskname: taskname, args: args, host: hostdesc, hostname: hostname, ssh: hostdesc.ssh}
 
 	binding.pry if $gvars[:debug_tasks]
 
@@ -352,7 +398,7 @@ def hndl_task_upload(t)
 			localfname = get_localfname(t, localfname)
 			remotefname = get_remotefname(t, remotedesc[0])
 
-			if t[:host]["sudo"]
+			if t[:host].sudo
 				tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
 				$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
 				t[:ssh].scp.upload! localfname, tmp_fname
@@ -367,7 +413,7 @@ def hndl_task_upload(t)
 				if remotedesc[1] != "@"
 					do_ssh(t, "chown #{complete_cmd(t, remotedesc[1])} '#{remotefname}'")
 				else
-					do_ssh(t, "chown #{t[:host]["user"]} '#{remotefname}'")
+					do_ssh(t, "chown #{t[:host].user} '#{remotefname}'")
 				end
 			end
 			do_ssh(t, "chmod #{complete_cmd(t, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
@@ -378,7 +424,7 @@ end
 def get_localfname(t, fname)
 	fname = complete_cmd(t, fname)
 
-	return "#{t[:hostname]}/#{fname}" if File.exist?("#{t[:hostname]}/#{fname}")
+	return "#{t[:host].hostname}/#{fname}" if File.exist?("#{t[:hostname]}/#{fname}")
 	return fname if File.exist?(fname)
 
 	raise "local file '#{fname}' not found"
@@ -386,7 +432,7 @@ end
 
 def get_remotefname(t, fname)
 	fname = complete_cmd(t, fname)
-	fname.gsub!("~/", (((t[:host]["user"] || "root") == "root") ? "/root/" : "/home/#{t[:host]["user"]}/"))
+	fname.gsub!("~/", (((t[:host].user || "root") == "root") ? "/root/" : "/home/#{t[:host].user}/"))
 
 	match = fname.scan(/~([^ \/]+)/)
 	match.each {|m| m = m[0];
@@ -413,7 +459,7 @@ end
 
 def do_ssh(t, cmd, opts= {})
 	cmd = complete_cmd(t, cmd.to_s.dup)
-	cmd = "sudo -u #{t[:host]["sudo"]} " + cmd if t[:host]["sudo"]
+	cmd = "sudo -u #{t[:host].sudo} " + cmd if t[:host].sudo
 	ret = ""
 	status ||= {}
 
