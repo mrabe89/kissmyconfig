@@ -46,7 +46,7 @@ class KissItHost < KissIt
 	def set(hostname, hostdesc)
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
 		@wants = []
-		@ssh = nil
+		@connection = nil
 
 		raise "#{hostname} ip missing or not a string" if hostdesc["ip"].class != String
 
@@ -75,18 +75,23 @@ class KissItHost < KissIt
 		return self
 	end
 
-	def ssh
-		connect() if @ssh.nil?
-		return @ssh
+	def exec(t, cmd, opts= {})
+		connect() if not @connection
+		@connection.exec(t, cmd, opts)
+	end
+
+	def cp(localfname, remotefname)
+		connect() if not @connection
+		@connection.cp(localfname, remotefname)
 	end
 
 	def connect()
-		@ssh = Net::SSH.start(@cfg[:ip], @cfg[:user] || "root", password: @cfg[:password])
+		@connection = KissItConnectionSSH.new.connect(@cfg[:ip], @cfg[:user], password: @cfg[:password])
 	end
 
 	def disconnect()
-		@ssh.close
-		@ssh = nil
+		@connection.disconnect()
+		@connection = nil
 	end
 end
 
@@ -94,9 +99,60 @@ class KissItTask < KissIt
 end
 
 class KissItConnection < KissIt
+	def exec(t, cmd, opts= {});		raise "prototype called";	end
+	def cp(localfname, remotefname);	raise "prototype called";	end
 end
 
 class KissItConnectionSSH < KissItConnection
+	def connect(ip, user = "root", password = nil)
+		@ssh = Net::SSH.start(ip, user, password: password)
+		return self
+	end
+
+	def disconnect()
+		@ssh.close
+		@ssh = nil
+	end
+
+	def exec(t, cmd, opts= {})
+		cmd = complete_cmd(t, cmd.to_s.dup)
+		cmd = "sudo -u #{t[:host].sudo} " + cmd if t[:host].sudo
+		ret = ""
+		status ||= {}
+
+		$stderr.puts "     exec: #{cmd.inspect}"
+		begin
+			@ssh.exec!(cmd, status: status) do |channel, stream, data|
+				if not data.empty?
+					$stderr.print "     > " if ret.empty?
+					$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
+					$stderr.print data.rstrip.gsub("\n", "\n       ")
+				end
+
+				ret += data
+			end
+			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}"
+
+		rescue IOError => e
+			if t[:task][t[:subtask]]["flags"] and t[:task][t[:subtask]]["flags"].include? :will_lose_connection
+				$stderr.puts "       ### Connection lost - but was expected"
+				return ["", 0] if opts[:ret_output].to_i == 1
+				return 0
+			else
+				raise e
+			end
+		end
+
+		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{status[:exit_code]}"; exit 1) \
+				if (not status[:exit_code].zero?) and opts[:error_is_ok].to_i == 0
+
+		return [status[:exit_code], ret.to_s] if opts[:ret_output].to_i == 1
+		return status[:exit_code]
+	end
+
+	def cp(localfname, remotefname)
+		@ssh.scp.upload! localfname, remotefname
+	end
 end
 
 # func
@@ -277,7 +333,7 @@ def hndl_task(hostname, hostdesc, taskname, args = [])
 end
 
 def hndl_task_do(hostname, hostdesc, taskname, args = [])
-	t = {task: $desc["tasks"][taskname], taskname: taskname, args: args, host: hostdesc, hostname: hostname, ssh: hostdesc.ssh}
+	t = {task: $desc["tasks"][taskname], taskname: taskname, args: args, host: hostdesc, hostname: hostname}
 
 	binding.pry if $gvars[:debug_tasks]
 
@@ -333,14 +389,14 @@ def hndl_task_record(t)
 	$stderr.puts "   ### Check State"
 	$stderr.puts "     ### Recording started (end with ctrl+d)"
 	while line = Readline.readline('> ', true)
-		ret = do_ssh(t, line, {error_is_ok: 1})
+		ret = t[:host].exec(t, line, {error_is_ok: 1})
 		t[:task][t[:subtask]]["state"] = line
 	end
 
 	$stderr.puts "\n   ### Exec Pre"
 	$stderr.puts "     ### Recording started (end with ctrl+d)"
 	while line = Readline.readline('> ', true)
-		ret = do_ssh(t, line, {error_is_ok: 1})
+		ret = t[:host].exec(t, line, {error_is_ok: 1})
 		if ret.zero?
 			t[:task][t[:subtask]]["pre"] << line
 		else
@@ -360,7 +416,7 @@ def hndl_task_state_ck(t, preck= true)
 
 	if t[:task][t[:subtask]]["state"]
 		t[:task][t[:subtask]]["state"].each {|cmd|
-			ret = do_ssh(t, cmd, {error_is_ok: 1})
+			ret = t[:host].exec(t, cmd, {error_is_ok: 1})
 			break if not ret.zero?
 		}
 	end
@@ -368,7 +424,7 @@ def hndl_task_state_ck(t, preck= true)
 	if t[:task][t[:subtask]]["cp"] and ret == 0
 		t[:task][t[:subtask]]["cp"].each {|localfname, remotedesc|
 			md5_local = `md5sum '#{get_localfname(t, localfname)}'`
-			ret, md5_remote = do_ssh(t, "md5sum '#{get_remotefname(t, remotedesc[0])}'", {error_is_ok: 1, ret_output: 1});
+			ret, md5_remote = t[:host].exec(t, "md5sum '#{get_remotefname(t, remotedesc[0])}'", {error_is_ok: 1, ret_output: 1});
 			verbose("     ### #{md5_local}")
 			verbose("     ### #{md5_remote}")
 			($stderr.puts "     ### #{md5_local} -> MD5 mismatch or missing"; ret = 1) \
@@ -386,7 +442,7 @@ end
 def hndl_task_exec(t, subsubtask)
 	if t[:task][t[:subtask]][subsubtask]
 		$stderr.puts "   ### Perform Actions (#{subsubtask})"
-		t[:task][t[:subtask]][subsubtask].each {|cmd| do_ssh(t, cmd) }
+		t[:task][t[:subtask]][subsubtask].each {|cmd| t[:host].exec(t, cmd) }
 	end
 end
 
@@ -401,22 +457,22 @@ def hndl_task_upload(t)
 			if t[:host].sudo
 				tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
 				$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
-				t[:ssh].scp.upload! localfname, tmp_fname
+				t[:host].cp(localfname, tmp_fname)
 				$stderr.puts "     ### Renaming to #{remotefname}"
-				do_ssh(t, "mv #{tmp_fname} '#{remotefname}'")
+				t[:host].exec(t, "mv #{tmp_fname} '#{remotefname}'")
 			else
 				$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
-				t[:ssh].scp.upload! localfname, remotefname
+				t[:host].cp(localfname, remotefname)
 			end
 
 			if remotedesc[1]
 				if remotedesc[1] != "@"
-					do_ssh(t, "chown #{complete_cmd(t, remotedesc[1])} '#{remotefname}'")
+					t[:host].exec(t, "chown #{complete_cmd(t, remotedesc[1])} '#{remotefname}'")
 				else
-					do_ssh(t, "chown #{t[:host].user} '#{remotefname}'")
+					t[:host].exec(t, "chown #{t[:host].user} '#{remotefname}'")
 				end
 			end
-			do_ssh(t, "chmod #{complete_cmd(t, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
+			t[:host].exec(t, "chmod #{complete_cmd(t, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
 		}
 	end
 end
@@ -455,42 +511,6 @@ def complete_cmd(t, str)
 	}
 
 	return str
-end
-
-def do_ssh(t, cmd, opts= {})
-	cmd = complete_cmd(t, cmd.to_s.dup)
-	cmd = "sudo -u #{t[:host].sudo} " + cmd if t[:host].sudo
-	ret = ""
-	status ||= {}
-
-	$stderr.puts "     exec: #{cmd.inspect}"
-	begin
-		t[:ssh].exec!(cmd, status: status) do |channel, stream, data|
-			if not data.empty?
-				$stderr.print "     > " if ret.empty?
-				$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
-				$stderr.print data.rstrip.gsub("\n", "\n       ")
-			end
-
-			ret += data
-		end
-		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}"
-
-	rescue IOError => e
-		if t[:task][t[:subtask]]["flags"] and t[:task][t[:subtask]]["flags"].include? :will_lose_connection
-			$stderr.puts "       ### Connection lost - but was expected"
-			return ["", 0] if opts[:ret_output].to_i == 1
-			return 0
-		else
-			raise e
-		end
-	end
-
-	($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{status[:exit_code]}"; exit 1) \
-			if (not status[:exit_code].zero?) and opts[:error_is_ok].to_i == 0
-
-	return [status[:exit_code], ret.to_s] if opts[:ret_output].to_i == 1
-	return status[:exit_code]
 end
 
 def verbose(msg)
