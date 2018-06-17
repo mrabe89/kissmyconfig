@@ -36,19 +36,17 @@ class KissIt
 end
 
 class KissItHost < KissIt
-	def hostname;	return @cfg[:hostname];	end
-	def ip;		return @cfg[:ip];	end
-	def password;	return @cfg[:password];	end
-	def user;	return @cfg[:user];	end
-	def sudo;	return @cfg[:sudo];	end
-	def wants;	return @wants;		end
+	def hostname;	return @cfg[:hostname];		end
+	def ip;		return @cfg[:ip];		end
+	def password;	return @cfg[:password];		end
+	def user;	return @cfg[:user] || "root";	end
+	def sudo;	return @cfg[:sudo];		end
+	def wants;	return @wants;			end
 
 	def set(hostname, hostdesc)
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
 		@wants = []
 		@connection = nil
-
-		raise "#{hostname} ip missing or not a string" if hostdesc["ip"].class != String
 
 		hostdesc.each {|hostdefname, hostdefval|
 			case hostdefname
@@ -75,9 +73,9 @@ class KissItHost < KissIt
 		return self
 	end
 
-	def exec(t, cmd, opts= {})
+	def exec(cmd, opts= {})
 		connect() if not @connection
-		@connection.exec(t, cmd, opts)
+		@connection.exec(cmd, opts)
 	end
 
 	def cp(localfname, remotefname)
@@ -86,7 +84,11 @@ class KissItHost < KissIt
 	end
 
 	def connect()
-		@connection = KissItConnectionSSH.new.connect(@cfg[:ip], @cfg[:user], password: @cfg[:password])
+		if @cfg[:ip]
+			@connection = KissItConnectionSSH.new.connect(self)
+		else
+			raise "IP missing for #{hostname}"
+		end
 	end
 
 	def disconnect()
@@ -106,165 +108,31 @@ class KissItTask < KissIt
 		taskdesc.each {|subtaskname, subtaskdesc|
 			raise "subtaskname #{subtaskname} not allowed (in #{taskname})" \
 					if not $gvars[:subtasks].include? subtaskname
-			@subs[subtaskname.to_sym] = KissItTaskSub.new.set(subtaskname, subtaskdesc)
+			@subs[subtaskname.to_sym] = KissItTaskSub.new.set(self, subtaskname, subtaskdesc)
 		}
 
 		return self
 	end
 
-	def exec(hostname, hostdesc, taskname, args = [])
-		t = {task: $desc["tasks"][taskname], taskname: taskname, args: args, host: hostdesc, hostname: hostname}
-
+	def exec(host, args = [])
 		binding.pry if $gvars[:debug_tasks]
 
-		if t[:task].nil?
-			return if $desc["tasks"].include?(taskname)
-			raise "task #{t[:taskname].inspect} wanted by #{t[:hostname].inspect} unknown"
-		end
-
-		$gvars[:subtasks].each {|subtask| t[:subtask] = subtask
-			next if t[:task][subtask].nil?
-
-			$stderr.puts " ### DO #{t[:taskname]}/#{t[:subtask]}"
-
-			next if hndl_task_state_ck(t) == :skip
-
-			hndl_task_exec(t, "pre")
-			hndl_task_upload(t)
-			hndl_task_exec(t, "post")
-
-			hndl_task_state_ck(t, false)
-
-			if t[:task][t[:subtask]]["flags"]
-				($stderr.puts "   ### sleep 10"; sleep 10) if t[:task][t[:subtask]]["flags"].include? :sleep_10
-				($stderr.puts "   ### sleep 30"; sleep 30) if t[:task][t[:subtask]]["flags"].include? :sleep_30
-				($stderr.puts "   ### sleep 60"; sleep 60) if t[:task][t[:subtask]]["flags"].include? :sleep_60
-			end
-
-			$stderr.puts  "   ### OK"
+		$gvars[:subtasks].each {|subtask| subtask = subtask.to_sym
+			next if @subs[subtask].nil?
+			@subs[subtask].exec(host, args)
 		}
 		$stderr.puts  " ### OK"
 
 		binding.pry if $gvars[:debug_tasks]
 	end
-
-	def hndl_task_state_ck(t, preck= true)
-		return :ok if (preck and $gvars[:force]) or (not preck and not $gvars[:verify])
-		return :ok if not t[:task][t[:subtask]]["state"] and not t[:task][t[:subtask]]["cp"]
-
-		$stderr.puts  "   ### Check #{preck ? "State" : "Success"}"
-		ret = 0
-
-		if t[:task][t[:subtask]]["state"]
-			t[:task][t[:subtask]]["state"].each {|cmd|
-				ret = t[:host].exec(t, complete_cmd(t, cmd), {error_is_ok: 1})
-				break if not ret.zero?
-			}
-		end
-
-		if t[:task][t[:subtask]]["cp"] and ret == 0
-			t[:task][t[:subtask]]["cp"].each {|localfname, remotedesc|
-				md5_local = `md5sum '#{get_localfname(t, localfname)}'`
-				ret, md5_remote = t[:host].exec(t, "md5sum '#{get_remotefname(t, remotedesc[0])}'", {error_is_ok: 1, ret_output: 1});
-				verbose("     ### #{md5_local}")
-				verbose("     ### #{md5_remote}")
-				($stderr.puts "     ### #{md5_local} -> MD5 mismatch or missing"; ret = 1) \
-					if not ret.zero? or (md5_local.split[0] != md5_remote.split[0])
-				break if not ret.zero?
-			}
-		end
-
-		($stderr.puts "   ### Nothing to do"; return :skip) if preck and ret.zero?
-		($stderr.puts "!!!!!! FAILED : state condition not satisfied after completion"; exit 1) if not preck and not ret.zero?
-
-		return :ok
-	end
-
-	def hndl_task_exec(t, subsubtask)
-		if t[:task][t[:subtask]][subsubtask]
-			$stderr.puts "   ### Perform Actions (#{subsubtask})"
-			t[:task][t[:subtask]][subsubtask].each {|cmd| t[:host].exec(t, complete_cmd(t, cmd)) }
-		end
-	end
-
-	def hndl_task_upload(t)
-		if t[:task][t[:subtask]]["cp"]
-			$stderr.puts "   ### Uploading Files"
-
-			t[:task][t[:subtask]]["cp"].each {|localfname, remotedesc|
-				localfname = get_localfname(t, localfname)
-				remotefname = get_remotefname(t, remotedesc[0])
-
-				if t[:host].sudo
-					tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
-					$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
-					t[:host].cp(localfname, tmp_fname)
-					$stderr.puts "     ### Renaming to #{remotefname}"
-					t[:host].exec(t, "mv #{tmp_fname} '#{remotefname}'")
-				else
-					$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
-					t[:host].cp(localfname, remotefname)
-				end
-
-				if remotedesc[1]
-					if remotedesc[1] != "@"
-						t[:host].exec(t, "chown #{complete_cmd(t, remotedesc[1])} '#{remotefname}'")
-					else
-						t[:host].exec(t, "chown #{t[:host].user} '#{remotefname}'")
-					end
-				end
-				t[:host].exec(t, "chmod #{complete_cmd(t, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
-			}
-		end
-	end
-
-	def get_localfname(t, fname)
-		fname = complete_cmd(t, fname)
-
-		return "#{t[:host].hostname}/#{fname}" if File.exist?("#{t[:hostname]}/#{fname}")
-		return fname if File.exist?(fname)
-
-		raise "local file '#{fname}' not found"
-	end
-
-	def get_remotefname(t, fname)
-		fname = complete_cmd(t, fname)
-		fname.gsub!("~/", (((t[:host].user || "root") == "root") ? "/root/" : "/home/#{t[:host].user}/"))
-
-		match = fname.scan(/~([^ \/]+)/)
-		match.each {|m| m = m[0];
-			fname.gsub!("~#{m}/", ((m == "root") ? "/root/" : "/home/#{m}/"))
-		}
-
-		return fname
-	end
-
-	def complete_cmd(t, str)
-		str = str.to_s.dup
-
-		match = str.scan(/(%ARG\d+%)/)
-		match.each {|m| m = m[0]; str.gsub!(m, t[:args][m[4..-2].to_i].to_s) }
-
-		match = str.scan(/\(\(\$([^ ]+)/)
-		match.each {|m| m = m[0];
-			raise "unknown 'macro' #{m} in #{t[:taskname]}/#{t[:subtask]}" if $desc["macros"][m].nil?
-			str.gsub!("(($#{m}", $desc["macros"][m].to_s)
-		}
-
-		return str
-	end
-
-	def verbose(msg)
-		$stderr.puts msg if $gvars[:verbose]
-	end
-
 end
 
 class KissItTaskSub < KissIt
 	def subtaskname;	return @cfg[:subtaskname];	end
 
-	def set(subtaskname, subtaskdesc)
+	def set(parent, subtaskname, subtaskdesc)
 		@cfg = {subtaskname: subtaskname}
+		@parent = parent
 		@desc = {}
 
 		subtaskdesc.each{|subsubtaskname, subsubtaskdesc|
@@ -297,16 +165,147 @@ class KissItTaskSub < KissIt
 
 		return self
 	end
+
+	def exec(host, args = [])
+		$stderr.puts " ### DO #{@parent.taskname}/#{subtaskname}"
+
+		return if hndl_task_state_ck(host, args) == :skip
+
+		hndl_task_exec(host, args, :pre)
+		hndl_task_upload(host, args)
+		hndl_task_exec(host, args, :post)
+
+		hndl_task_state_ck(host, args, false)
+
+		if @cfg[:flags]
+			($stderr.puts "   ### sleep 10"; sleep 10) if @desc[:flags].include? :sleep_10
+			($stderr.puts "   ### sleep 30"; sleep 30) if @desc[:flags].include? :sleep_30
+			($stderr.puts "   ### sleep 60"; sleep 60) if @desc[:flags].include? :sleep_60
+		end
+
+		$stderr.puts  "   ### OK"
+	end
+
+	def hndl_task_state_ck(host, args, preck= true)
+		return :ok if (preck and $gvars[:force]) or (not preck and not $gvars[:verify])
+		return :ok if not @desc[:state] and not @desc[:cp]
+
+		$stderr.puts  "   ### Check #{preck ? "State" : "Success"}"
+		ret = 0
+
+		if @desc[:state]
+			@desc[:state].each {|cmd|
+				ret = host.exec(complete_cmd(host, args, cmd), {error_is_ok: 1})
+				break if not ret.zero?
+			}
+		end
+
+		if @desc[:cp] and ret == 0
+			@desc[:cp].each {|localfname, remotedesc|
+				md5_local = `md5sum '#{get_localfname(host, args, localfname)}'`
+				ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args, remotedesc[0])}'", {error_is_ok: 1, ret_output: 1});
+				verbose("     ### #{md5_local}")
+				verbose("     ### #{md5_remote}")
+				($stderr.puts "     ### #{md5_local} -> MD5 mismatch or missing"; ret = 1) \
+					if not ret.zero? or (md5_local.split[0] != md5_remote.split[0])
+				break if not ret.zero?
+			}
+		end
+
+		($stderr.puts "   ### Nothing to do"; return :skip) if preck and ret.zero?
+		($stderr.puts "!!!!!! FAILED : state condition not satisfied after completion"; exit 1) if not preck and not ret.zero?
+
+		return :ok
+	end
+
+	def hndl_task_exec(host, args, subsubtask)
+		if @desc[subsubtask]
+			$stderr.puts "   ### Perform Actions (#{subsubtask})"
+			@desc[subsubtask].each {|cmd| host.exec(complete_cmd(host, args, cmd), @desc[:flags]) }
+		end
+	end
+
+	def hndl_task_upload(host, args)
+		if @desc[:cp]
+			$stderr.puts "   ### Uploading Files"
+
+			@desc[:cp].each {|localfname, remotedesc|
+				localfname = get_localfname(host, args, localfname)
+				remotefname = get_remotefname(host, args, remotedesc[0])
+
+				if host.sudo
+					tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
+					$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
+					host.cp(localfname, tmp_fname)
+					$stderr.puts "     ### Renaming to #{remotefname}"
+					host.exec("mv #{tmp_fname} '#{remotefname}'")
+				else
+					$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
+					host.cp(localfname, remotefname)
+				end
+
+				if remotedesc[1]
+					if remotedesc[1] != "@"
+						host.exec("chown #{complete_cmd(host, args, remotedesc[1])} '#{remotefname}'")
+					else
+						host.exec("chown #{host.user} '#{remotefname}'")
+					end
+				end
+				host.exec("chmod #{complete_cmd(host, args, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
+			}
+		end
+	end
+
+	def get_localfname(host, args, fname)
+		fname = complete_cmd(host, args, fname)
+
+		return "#{host.hostname}/#{fname}" if File.exist?("#{host.hostname}/#{fname}")
+		return fname if File.exist?(fname)
+
+		raise "local file '#{fname}' not found"
+	end
+
+	def get_remotefname(host, args, fname)
+		fname = complete_cmd(host, args, fname)
+		fname.gsub!("~/", ((host.user == "root") ? "/root/" : "/home/#{host.user}/"))
+
+		match = fname.scan(/~([^ \/]+)/)
+		match.each {|m| m = m[0];
+			fname.gsub!("~#{m}/", ((m == "root") ? "/root/" : "/home/#{m}/"))
+		}
+
+		return fname
+	end
+
+	def complete_cmd(host, args, str)
+		str = str.to_s.dup
+
+		match = str.scan(/(%ARG\d+%)/)
+		match.each {|m| m = m[0]; str.gsub!(m, args[m[4..-2].to_i].to_s) }
+
+		match = str.scan(/\(\(\$([^ ]+)/)
+		match.each {|m| m = m[0];
+			raise "unknown 'macro' #{m} in #{@parent.taskname}/#{subtaskname}" if $desc["macros"][m].nil?
+			str.gsub!("(($#{m}", $desc["macros"][m].to_s)
+		}
+
+		return str
+	end
+
+	def verbose(msg)
+		$stderr.puts msg if $gvars[:verbose]
+	end
 end
 
 class KissItConnection < KissIt
-	def exec(t, cmd, opts= {});		raise "prototype called";	end
+	def exec(cmd, opts= {});		raise "prototype called";	end
 	def cp(localfname, remotefname);	raise "prototype called";	end
 end
 
 class KissItConnectionSSH < KissItConnection
-	def connect(ip, user = "root", password = nil)
-		@ssh = Net::SSH.start(ip, user, password: password)
+	def connect(host)
+		@parent = host
+		@ssh = Net::SSH.start(host.ip, host.user, password: host.password)
 		return self
 	end
 
@@ -315,10 +314,11 @@ class KissItConnectionSSH < KissItConnection
 		@ssh = nil
 	end
 
-	def exec(t, cmd, opts= {})
+	def exec(cmd, opts= nil)
 		cmd = cmd.to_s.dup
-		cmd = "sudo -u #{t[:host].sudo} " + cmd if t[:host].sudo
+		cmd = "sudo -u #{@parent.sudo} " + cmd if @parent.sudo
 		ret = ""
+		opts ||= {}
 		status ||= {}
 
 		$stderr.puts "     exec: #{cmd.inspect}"
@@ -335,7 +335,7 @@ class KissItConnectionSSH < KissItConnection
 			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}"
 
 		rescue IOError => e
-			if t[:task][t[:subtask]]["flags"] and t[:task][t[:subtask]]["flags"].include? :will_lose_connection
+			if opts[:flags].include? :will_lose_connection
 				$stderr.puts "       ### Connection lost - but was expected"
 				return ["", 0] if opts[:ret_output].to_i == 1
 				return 0
@@ -442,45 +442,9 @@ def validate_yml(desc)
 		desc["hosts"][hostname] = KissItHost.new.set(hostname, hostdesc)
 	}
 
-	desc["tasks_"] = {}
 	desc["tasks"].each {|taskname, taskdesc|
 		next if taskdesc.nil?
-		desc["tasks_"][taskname] = KissItTask.new.set(taskname, taskdesc)
-
-		taskdesc.each {|subtaskname, subtaskdesc|
-			raise "subtaskname #{subtaskname} not allowed (in #{taskname})" \
-					if not $gvars[:subtasks].include? subtaskname
-			subtaskdesc.each{|subsubtaskname, subsubtaskdesc|
-				case subsubtaskname
-				when "state", "pre", "post"
-					subsubtaskdesc = [subsubtaskdesc] if subsubtaskdesc.class != Array
-				when "cp"
-					subsubtaskdesc.each {|cp, cpdesc|
-						if cpdesc.class != Array
-							subsubtaskdesc[cp] = [cpdesc]
-						else
-							raise "subsubtaskname #{subsubtaskname} has too many parameter " +
-									"for #{cp.inspect} " +
-									"(in #{taskname}/#{subtaskname})" if cpdesc.size > 3
-						end
-					}
-				when "flags"
-					subsubtaskdesc = [subsubtaskdesc] if subsubtaskdesc.class != Array
-					subsubtaskdesc.each {|f|
-						next if [:will_lose_connection, :sleep_10, :sleep_30, :sleep_60].include? f
-						raise "subsubtaskname #{subsubtaskname} has a unknown flag (#{f.inspect}) " +
-								"(in #{taskname}/#{subtaskname})"
-					}
-				else
-					raise "subsubtaskname #{subsubtaskname} not allowed (in #{taskname}/#{subtaskname})"
-				end
-
-				subtaskdesc[subsubtaskname] = subsubtaskdesc
-			}
-			taskdesc[subtaskname] = subtaskdesc
-		}
-
-		desc["tasks"][taskname] = taskdesc
+		desc["tasks"][taskname] = KissItTask.new.set(taskname, taskdesc)
 	}
 
 	return desc
@@ -490,41 +454,42 @@ def hndl_desc()
 	if $gvars[:hostname] != "*"
 		host = $desc["hosts"][$gvars[:hostname]]
 		raise "hostname #{$gvars[:hostname]} not found" if host.nil?
-		hndl_host($gvars[:hostname], host)
+		hndl_host(host)
 	else
-		$desc["hosts"].each {|name, desc| hndl_host(name, desc) }
+		$desc["hosts"].each {|name, host| hndl_host(host) }
 	end
 end
 
-def hndl_host(name, host)
-	$stderr.puts "## HOST: #{name}"
+def hndl_host(host)
+	$stderr.puts "## HOST: #{host.hostname}"
 
 	host.connect()
 
 	if $gvars[:taskname] != "*"
-		hndl_task(name, host, $gvars[:taskname])
+		hndl_task(host, $gvars[:taskname])
 	else
 		host.wants.to_a.each {|taskname|
-			hndl_task(name, host, taskname[0], taskname[1..-1])
+			hndl_task(host, taskname[0], taskname[1..-1])
 		}
 	end
 
 	host.disconnect()
 end
 
-def hndl_task(hostname, hostdesc, taskname, args = [])
+def hndl_task(host, taskname, args = [])
 	# execute task for each value in array
 	args.each_with_index {|arg, i|
 		if arg.class == Array
 			arg.each {|a|
 				a = [a] if a.class != Array
-				hndl_task(hostname, hostdesc, taskname, (i.zero? ? [] : args[0..i-1]) + a + (args[i+1..-1] || []))
+				hndl_task(host, taskname, (i.zero? ? [] : args[0..i-1]) + a + (args[i+1..-1] || []))
 			}
 			return
 		end
 	}
 
-	$desc["tasks_"][taskname].exec(hostname, hostdesc, taskname, args)
+	raise "task #{taskname.inspect} wanted by #{host.hostname.inspect} unknown" if $desc["tasks"][taskname].nil?
+	$desc["tasks"][taskname].exec(host, args)
 end
 
 # main
