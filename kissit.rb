@@ -84,10 +84,10 @@ class KissItHost < KissIt
 	end
 
 	def connect()
-		if @cfg[:ip]
-			@connection = KissItConnectionSSH.new.connect(self)
+		if not @cfg[:ip]
+			@connection = KissItConnectionLocal.new.connect(self)
 		else
-			raise "IP missing for #{hostname}"
+			@connection = KissItConnectionSSH.new.connect(self)
 		end
 	end
 
@@ -298,8 +298,66 @@ class KissItTaskSub < KissIt
 end
 
 class KissItConnection < KissIt
-	def exec(cmd, opts= {});		raise "prototype called";	end
-	def cp(localfname, remotefname);	raise "prototype called";	end
+	# connect(host);
+	# disconnect();
+	# exec_do(cmd, opts= nil);
+	# def cp(localfname, remotefname);
+
+	def exec(cmd, opts= nil)
+		cmd = cmd.to_s.dup
+		cmd = "sudo -u #{@parent.sudo} " + cmd if @parent.sudo
+		opts ||= {}
+
+		$stderr.puts "     exec: #{cmd.inspect}"
+		ret, exit_code = exec_native(cmd)
+
+		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{status[:exit_code]}"; exit 1) \
+				if (not exit_code.zero?) and opts[:error_is_ok].to_i == 0
+
+		return [exit_code, ret.to_s] if opts[:ret_output].to_i == 1
+		return exit_code
+	end
+
+	def exec_disp(ret, data)
+		if not data.empty?
+			$stderr.print "     > " if ret.empty?
+			$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
+			$stderr.print data.rstrip.gsub("\n", "\n       ")
+		end
+
+		return ret + data
+	end
+end
+
+class KissItConnectionLocal < KissItConnection
+	def connect(host)
+		@parent = host
+		return self
+	end
+
+	def disconnect()
+		# not needed
+	end
+
+	def exec_native(cmd, opts= nil)
+		ret = ""
+		exit_code = -1
+
+		IO.popen(cmd) do |io|
+			while data = io.gets
+				ret = exec_disp(ret, data)
+			end
+			io.close
+			exit_code = $?.to_i
+		end
+		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}"
+
+		return ret, exit_code
+	end
+
+	def cp(localfname, remotefname)
+		exec("cp -v '#{localfname}' '#{remotefname}'")
+	end
 end
 
 class KissItConnectionSSH < KissItConnection
@@ -314,23 +372,13 @@ class KissItConnectionSSH < KissItConnection
 		@ssh = nil
 	end
 
-	def exec(cmd, opts= nil)
-		cmd = cmd.to_s.dup
-		cmd = "sudo -u #{@parent.sudo} " + cmd if @parent.sudo
-		ret = ""
-		opts ||= {}
+	def exec_native(cmd, opts= nil)
 		status ||= {}
+		ret = ""
 
-		$stderr.puts "     exec: #{cmd.inspect}"
 		begin
 			@ssh.exec!(cmd, status: status) do |channel, stream, data|
-				if not data.empty?
-					$stderr.print "     > " if ret.empty?
-					$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
-					$stderr.print data.rstrip.gsub("\n", "\n       ")
-				end
-
-				ret += data
+				ret = exec_disp(ret, data)
 			end
 			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}"
 
@@ -344,11 +392,7 @@ class KissItConnectionSSH < KissItConnection
 			end
 		end
 
-		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{status[:exit_code]}"; exit 1) \
-				if (not status[:exit_code].zero?) and opts[:error_is_ok].to_i == 0
-
-		return [status[:exit_code], ret.to_s] if opts[:ret_output].to_i == 1
-		return status[:exit_code]
+		return ret, status[:exit_code]
 	end
 
 	def cp(localfname, remotefname)
