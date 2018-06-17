@@ -27,7 +27,7 @@ require 'net/scp'
 VERSION = "0.0.1"
 
 # const
-$gvars = {verbose: false, force: false, verify: true, record: false, debug_tasks: false, refmt: false}
+$gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false}
 $desc = nil
 $default_subtasks = "prep:install:config"
 
@@ -117,22 +117,15 @@ class KissItTask < KissIt
 
 		binding.pry if $gvars[:debug_tasks]
 
-		if t[:task].nil? and not $gvars[:record]
+		if t[:task].nil?
 			return if $desc["tasks"].include?(taskname)
 			raise "task #{t[:taskname].inspect} wanted by #{t[:hostname].inspect} unknown"
 		end
 
-		if $gvars[:record]
-			t[:task] = {}
-			$gvars[:subtasks].each {|subtask| t[:task][subtask] = {"pre" => [], "post" => []}}
-		end
-
 		$gvars[:subtasks].each {|subtask| t[:subtask] = subtask
-			next if t[:task][subtask].nil? and not $gvars[:record]
+			next if t[:task][subtask].nil?
 
 			$stderr.puts " ### DO #{t[:taskname]}/#{t[:subtask]}"
-
-			(hndl_task_record(t); next) if $gvars[:record]
 
 			next if hndl_task_state_ck(t) == :skip
 
@@ -152,39 +145,7 @@ class KissItTask < KissIt
 		}
 		$stderr.puts  " ### OK"
 
-		if $gvars[:record]
-			dump = YAML.dump({"tasks" => {t[:taskname] => t[:task]}})
-			if $gvars[:record_fname]
-				File.open($gvars[:record_fname], "a") {|f| f.puts dump}
-				$stderr.puts "## Record saved to #{$gvars[:record_fname]}"
-			else
-				$stderr.puts dump
-			end
-		end
-
 		binding.pry if $gvars[:debug_tasks]
-	end
-
-	def hndl_task_record(t)
-		$stderr.puts "   ### Check State"
-		$stderr.puts "     ### Recording started (end with ctrl+d)"
-		while line = Readline.readline('> ', true)
-			ret = t[:host].exec(t, line, {error_is_ok: 1})
-			t[:task][t[:subtask]]["state"] = line
-		end
-
-		$stderr.puts "\n   ### Exec Pre"
-		$stderr.puts "     ### Recording started (end with ctrl+d)"
-		while line = Readline.readline('> ', true)
-			ret = t[:host].exec(t, line, {error_is_ok: 1})
-			if ret.zero?
-				t[:task][t[:subtask]]["pre"] << line
-			else
-				$stderr.puts "cmd returned with error / not saved"
-			end
-		end
-
-		hndl_task_state_ck(t, false)
 	end
 
 	def hndl_task_state_ck(t, preck= true)
@@ -401,8 +362,6 @@ def usage(ex= nil)
 	$stderr.puts "  subtasks default: #{$default_subtasks}"
 	$stderr.puts "  -f, --force			force execution / ignore state"
 	$stderr.puts "  -n, --no-verify			don't verify completion with state"
-	$stderr.puts "  -r, --record			use a very crude readline shell to record a task"
-	$stderr.puts "      --record-file	<fname>	same as record, but appends to file"
 	$stderr.puts "  -V, --verbose			print additional debug output"
 	$stderr.puts "      --debug-tasks		sets a break point at the beginning and end tasks"
 	$stderr.puts "      --refmt			prints reformated yml to stdout and exits"
@@ -420,9 +379,7 @@ def process_args()
 	opts= GetoptLong.new(
 		[ "--force",	"-f",	GetoptLong::NO_ARGUMENT ],
 		[ "--no-verify", "-n",	GetoptLong::NO_ARGUMENT ],
-		[ "--record",	"-r",	GetoptLong::NO_ARGUMENT ],
 		# since we have additional parameter, we can't use opt here
-		[ "--record-file",	GetoptLong::REQUIRED_ARGUMENT ],
 		[ "--verbose",	"-V",	GetoptLong::NO_ARGUMENT ],
 		[ "--debug-tasks",	GetoptLong::NO_ARGUMENT ],
 		[ "--refmt",		GetoptLong::NO_ARGUMENT ],
@@ -439,10 +396,6 @@ def process_args()
 				$gvars[:force] = true
 			when "--no-verify"
 				$gvars[:verify] = false
-			when "--record", "--record-file"
-				$gvars[:verbose] = true
-				$gvars[:record] = true
-				$gvars[:record_fname] = (arg.to_s.empty? ? nil : arg)
 			when "--verbose"
 				$gvars[:verbose] = true
 			when "--debug-tasks"
