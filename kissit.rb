@@ -142,11 +142,9 @@ class KissItTaskSub < KissIt
 			when "cp"
 				subsubtaskdesc.each {|cp, cpdesc|
 					if cpdesc.class != Array
-						subsubtaskdesc[cp] = [cpdesc]
+						subsubtaskdesc[cp] = KissItTaskSubFile.new.set(self, cp, cpdesc)
 					else
-						raise "subsubtaskname #{subsubtaskname} has too many parameter " +
-								"for #{cp.inspect} " +
-								"(in #{taskname}/#{subtaskname})" if cpdesc.size > 3
+						subsubtaskdesc[cp] = KissItTaskSubFile.new.set(self, cp, *cpdesc)
 					end
 				}
 			when "flags"
@@ -201,14 +199,8 @@ class KissItTaskSub < KissIt
 		end
 
 		if @desc[:cp] and ret == 0
-			@desc[:cp].each {|localfname, remotedesc|
-				md5_local = `md5sum '#{get_localfname(host, args, localfname)}'`
-				ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args, remotedesc[0])}'", {error_is_ok: 1, ret_output: 1});
-				verbose("     ### #{md5_local}")
-				verbose("     ### #{md5_remote}")
-				($stderr.puts "     ### #{md5_local} -> MD5 mismatch or missing"; ret = 1) \
-					if not ret.zero? or (md5_local.split[0] != md5_remote.split[0])
-				break if not ret.zero?
+			@desc[:cp].each {|_, file|
+				($stderr.puts "     ### File needs to be deployed"; ret = 1; break) if file.needs2run?(host, args)
 			}
 		end
 
@@ -229,52 +221,10 @@ class KissItTaskSub < KissIt
 		if @desc[:cp]
 			$stderr.puts "   ### Uploading Files"
 
-			@desc[:cp].each {|localfname, remotedesc|
-				localfname = get_localfname(host, args, localfname)
-				remotefname = get_remotefname(host, args, remotedesc[0])
-
-				if host.sudo
-					tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
-					$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
-					host.cp(localfname, tmp_fname)
-					$stderr.puts "     ### Renaming to #{remotefname}"
-					host.exec("mv #{tmp_fname} '#{remotefname}'")
-				else
-					$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
-					host.cp(localfname, remotefname)
-				end
-
-				if remotedesc[1]
-					if remotedesc[1] != "@"
-						host.exec("chown #{complete_cmd(host, args, remotedesc[1])} '#{remotefname}'")
-					else
-						host.exec("chown #{host.user} '#{remotefname}'")
-					end
-				end
-				host.exec("chmod #{complete_cmd(host, args, remotedesc[2])} '#{remotefname}'") if remotedesc[2]
+			@desc[:cp].each {|_, file|
+				file.deploy(host, args)
 			}
 		end
-	end
-
-	def get_localfname(host, args, fname)
-		fname = complete_cmd(host, args, fname)
-
-		return "#{host.hostname}/#{fname}" if File.exist?("#{host.hostname}/#{fname}")
-		return fname if File.exist?(fname)
-
-		raise "local file '#{fname}' not found"
-	end
-
-	def get_remotefname(host, args, fname)
-		fname = complete_cmd(host, args, fname)
-		fname.gsub!("~/", ((host.user == "root") ? "/root/" : "/home/#{host.user}/"))
-
-		match = fname.scan(/~([^ \/]+)/)
-		match.each {|m| m = m[0];
-			fname.gsub!("~#{m}/", ((m == "root") ? "/root/" : "/home/#{m}/"))
-		}
-
-		return fname
 	end
 
 	def complete_cmd(host, args, str)
@@ -291,9 +241,71 @@ class KissItTaskSub < KissIt
 
 		return str
 	end
+end
 
-	def verbose(msg)
-		$stderr.puts msg if $gvars[:verbose]
+class KissItTaskSubFile < KissIt
+	def set(subtask, fname, dest, user= nil, mod= nil)
+		@cfg= {fname: fname, dest: dest, user: user, mod: mod}
+		@parent = subtask
+
+		return self
+	end
+
+	def get_localfname(host, args)
+		fname = @parent.complete_cmd(host, args, @cfg[:fname])
+
+		return "#{host.hostname}/#{fname}" if File.exist?("#{host.hostname}/#{fname}")
+		return fname if File.exist?(fname)
+
+		raise "local file '#{fname}' not found"
+	end
+
+	def get_remotefname(host, args)
+		fname = @parent.complete_cmd(host, args, @cfg[:dest])
+		fname.gsub!("~/", ((host.user == "root") ? "/root/" : "/home/#{host.user}/"))
+
+		match = fname.scan(/~([^ \/]+)/)
+		match.each {|m| m = m[0];
+			fname.gsub!("~#{m}/", ((m == "root") ? "/root/" : "/home/#{m}/"))
+		}
+
+		return fname
+	end
+
+	def needs2run?(host, args)
+		md5_local = `md5sum '#{get_localfname(host, args)}'`
+		ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args)}'", {error_is_ok: 1, ret_output: 1});
+
+		verbose("     ### #{md5_local}")
+		verbose("     ### #{md5_remote}")
+
+		return true if not ret.zero? or (md5_local.split[0] != md5_remote.split[0])
+		return false
+	end
+
+	def deploy(host, args)
+		localfname = get_localfname(host, args)
+		remotefname = get_remotefname(host, args)
+
+		if host.sudo
+			tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
+			$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
+			host.cp(localfname, tmp_fname)
+			$stderr.puts "     ### Renaming to #{remotefname}"
+			host.exec("mv #{tmp_fname} '#{remotefname}'")
+		else
+			$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
+			host.cp(localfname, remotefname)
+		end
+
+		if @cfg[:user]
+			if @cfg[:user] != "@"
+				host.exec("chown #{@parent.complete_cmd(host, args, @cfg[:user])} '#{remotefname}'")
+			else
+				host.exec("chown #{host.user} '#{remotefname}'")
+			end
+		end
+		host.exec("chmod #{@parent.complete_cmd(host, args, @cfg[:mod])} '#{remotefname}'") if @cfg[:mod]
 	end
 end
 
@@ -534,6 +546,10 @@ def hndl_task(host, taskname, args = [])
 
 	raise "task #{taskname.inspect} wanted by #{host.hostname.inspect} unknown" if $desc["tasks"][taskname].nil?
 	$desc["tasks"][taskname].exec(host, args)
+end
+
+def verbose(msg)
+	$stderr.puts msg if $gvars[:verbose]
 end
 
 # main
