@@ -311,7 +311,7 @@ class KissItConnection < KissIt
 		$stderr.puts "     exec: #{cmd.inspect}"
 		ret, exit_code = exec_native(cmd)
 
-		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{status[:exit_code]}"; exit 1) \
+		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{exit_code}"; exit 1) \
 				if (not exit_code.zero?) and opts[:error_is_ok].to_i == 0
 
 		return [exit_code, ret.to_s] if opts[:ret_output].to_i == 1
