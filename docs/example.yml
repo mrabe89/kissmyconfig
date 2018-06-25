@@ -36,9 +36,12 @@ tasks:
     config:
       pre: systemctl stop httpd.service
       cp:
-        apache2/httpd.conf:        [ /etc/httpd/conf/httpd.conf,              "root:root", 644 ]
-        apache2/httpd-vhosts.conf: [ /etc/httpd/conf/extra/httpd-vhosts.conf, "root:root", 644 ]
-        apache2/php.ini:           [ /etc/php/php.ini,                        "root:root", 644 ]
+        apache2/httpd.conf:           [ /etc/httpd/conf/httpd.conf,              "root:root", 644 ]
+        # if you put a @ in front of the local fname, that file will be parse
+        # through ERB, this allows for dynamic configuration files.
+        # You f.e. check the host.hostname and disable/enable a part of the config
+        "@apache2/httpd-vhosts.conf:" [ /etc/httpd/conf/extra/httpd-vhosts.conf, "root:root", 644 ]
+        apache2/php.ini:              [ /etc/php/php.ini,                        "root:root", 644 ]
       post: systemctl start httpd.service
 
   vimrc:

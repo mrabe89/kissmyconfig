@@ -27,7 +27,7 @@
 #         <command>
 #         <command> %ARG0% %ARG1%
 #       [cp]: // will also be used for state checking
-#         <local_fname>:
+#         <local_fname>: // put a @ in front of the local_fname to parse it through erb, this will allow for dynamic configfiles
 #           to: <remote_fname>
 #           own: [chown_to] (@ shortcut for hostdesc[user])
 #           mod: [chmod_to]

@@ -18,6 +18,7 @@
 #
 
 require 'getoptlong'
+require 'erb'
 require 'yaml'
 require 'readline'
 require 'pry-rescue'
@@ -78,9 +79,9 @@ class KissItHost < KissIt
 		@connection.exec(cmd, opts)
 	end
 
-	def cp(localfname, remotefname)
+	def cp(data, remotefname)
 		connect() if not @connection
-		@connection.cp(localfname, remotefname)
+		@connection.cp(data, remotefname)
 	end
 
 	def connect()
@@ -245,8 +246,14 @@ end
 
 class KissItTaskSubFile < KissIt
 	def set(subtask, fname, dest, user= nil, mod= nil)
-		@cfg= {fname: fname, dest: dest, user: user, mod: mod}
+		@cfg= {fname: fname, dest: dest, user: user, mod: mod, erb: false}
+		@data= nil
 		@parent = subtask
+
+		if @cfg[:fname][0].chr == "@"
+			@cfg[:erb] = true
+			@cfg[:fname] = @cfg[:fname][1..-1]
+		end
 
 		return self
 	end
@@ -272,30 +279,36 @@ class KissItTaskSubFile < KissIt
 		return fname
 	end
 
+	def get_data(host, args)
+		data = File.read(get_localfname(host, args))
+
+		return ERB.new(data).result(binding) if @cfg[:erb]
+		return data
+	end
+
 	def needs2run?(host, args)
-		md5_local = `md5sum '#{get_localfname(host, args)}'`
+		md5_local = Digest::MD5.hexdigest(get_data(host, args))
 		ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args)}'", {error_is_ok: 1, ret_output: 1});
 
 		verbose("     ### #{md5_local}")
 		verbose("     ### #{md5_remote}")
 
-		return true if not ret.zero? or (md5_local.split[0] != md5_remote.split[0])
+		return true if not ret.zero? or (md5_local != md5_remote.split[0])
 		return false
 	end
 
 	def deploy(host, args)
-		localfname = get_localfname(host, args)
 		remotefname = get_remotefname(host, args)
 
 		if host.sudo
 			tmp_fname="/tmp/kms_#{rand(36**8).to_s(36)}"
-			$stderr.puts "     ### Upload: #{localfname} to #{tmp_fname}"
-			host.cp(localfname, tmp_fname)
+			$stderr.puts "     ### Upload: data:#{@cfg[:fname]} to #{tmp_fname}"
+			host.cp(get_data(host, args), tmp_fname)
 			$stderr.puts "     ### Renaming to #{remotefname}"
 			host.exec("mv #{tmp_fname} '#{remotefname}'")
 		else
-			$stderr.puts "     ### Upload: #{localfname} to #{remotefname}"
-			host.cp(localfname, remotefname)
+			$stderr.puts "     ### Upload: data:#{@cfg[:fname]} to #{remotefname}"
+			host.cp(get_data(host, args), remotefname)
 		end
 
 		if @cfg[:user]
@@ -313,7 +326,7 @@ class KissItConnection < KissIt
 	# connect(host);
 	# disconnect();
 	# exec_do(cmd, opts= nil);
-	# def cp(localfname, remotefname);
+	# def cp(data, remotefname);
 
 	def exec(cmd, opts= nil)
 		cmd = cmd.to_s.dup
@@ -367,8 +380,9 @@ class KissItConnectionLocal < KissItConnection
 		return ret, exit_code
 	end
 
-	def cp(localfname, remotefname)
-		exec("cp -v '#{localfname}' '#{remotefname}'")
+	def cp(data, remotefname)
+		$stderr.puts "     Writing to #{remotefname}"
+		File.open(remotefname, "w") {|f| f.write(data) }
 	end
 end
 
@@ -407,8 +421,8 @@ class KissItConnectionSSH < KissItConnection
 		return ret, status[:exit_code]
 	end
 
-	def cp(localfname, remotefname)
-		@ssh.scp.upload! localfname, remotefname
+	def cp(data, remotefname)
+		@ssh.scp.upload! StringIO.new(data), remotefname
 	end
 end
 
