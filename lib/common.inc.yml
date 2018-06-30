@@ -1,0 +1,25 @@
+---
+tasks:
+  mkdir:
+    install:
+      state: test -d %ARG0%
+      pre: mkdir -p %ARG0%
+
+  usermod:
+    config:
+      pre: usermod %ARG1% %ARG0%
+
+  fixhome:
+    config:
+      pre: chown -R %ARG0%:%ARG1% ~%ARG0%
+
+  ssh_authorized:
+    config:
+      pre:
+        - mkdir -p ~%ARG0%/.ssh
+        - chown %ARG0%:%ARG1% ~%ARG0%/.ssh
+        - chmod 700 ~%ARG0%/.ssh
+      cp:
+        ssh/auth/%ARG0%: [ ~%ARG0%/.ssh/authorized_keys, "%ARG0%:%ARG1%", 400 ]
+
+# vim: syntax=yaml ts=2 sw=2 expandtab

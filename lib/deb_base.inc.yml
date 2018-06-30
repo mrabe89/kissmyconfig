@@ -1,0 +1,35 @@
+---
+macros:
+  apt-get: DEBIAN_FRONTEND=noninteractive apt-get
+  installpkg: DEBIAN_FRONTEND=noninteractive apt-get -y install
+
+tasks:
+  sysupdate:
+    install:
+      pre: apt-get update && (($apt-get upgrade
+
+  distupgrade:
+    install:
+      pre:
+        - apt-get clean
+      cp:
+        deb/%ARG0%/sources.list: [ /etc/apt/sources.list, "root:root", 644 ]
+      post:
+        - apt-get update
+        - (($apt-get upgrade
+        - (($apt-get dist-upgrade
+        - (($apt-get autoremove
+
+  reboot:
+    config:
+      pre: shutdown -r now
+      flags:
+        - :will_lose_connection
+        - :sleep_30
+
+  installpkg:
+    install:
+      state: dpkg -s %ARG0% &>/dev/null
+      pre: (($apt-get update && (($installpkg %ARG0%
+
+# vim: syntax=yaml ts=2 sw=2 expandtab

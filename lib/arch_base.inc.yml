@@ -1,16 +1,17 @@
 ---
 macros:
-  pacman: pacman -S --noconfirm
+  pacman: pacman --noconfirm
+  installpkg: pacman -S --noconfirm
 
 tasks:
   sysupdate:
     install:
-      pre: (($pacman -yu
+      pre: (($installpkg -yu
 
-  pacman:
+  installpkg:
     install:
-      state: pacman -Qi %ARG0% >/dev/null
-      pre: (($pacman  %ARG0%
+      state: (($pacman -Qi %ARG0% >/dev/null
+      pre: (($installpkg  %ARG0%
 
   set_hostname:
     config:
@@ -56,3 +57,5 @@ tasks:
       pre: shutdown -h now
       flags:
         - :will_lose_connection
+
+# vim: syntax=yaml ts=2 sw=2 expandtab

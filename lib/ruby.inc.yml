@@ -1,0 +1,26 @@
+---
+tasks:
+  rvm:
+    install:
+      state: test -e /etc/rvmrc
+      pre:
+        - "\\curl -sSL https://get.rvm.io | bash"
+    config:
+      state: /usr/bin/ruby --version | grep %ARG0%
+      pre:
+        - "bash -c '. /etc/profile.d/rvm.sh; rvm install %ARG0%'"
+        - "bash -c '. /etc/profile.d/rvm.sh; rvm use %ARG0% --default'"
+        - ln -sf /usr/local/rvm/rubies/default/bin/ruby /usr/bin/ruby
+        - "bash -c '. /etc/profile.d/rvm.sh; gem install bundle'"
+
+  rvm_gem:
+    install:
+      state: test -d /usr/local/rvm/gems/default/gems/%ARG0%-*
+      pre: "bash -c '. /etc/profile.d/rvm.sh; gem install %ARG1% %ARG0%'"
+
+  rvm_env:
+    install:
+      state: "%ARG1%"
+      pre: "bash -c '. /etc/profile.d/rvm.sh; %ARG0%'"
+
+# vim: syntax=yaml ts=2 sw=2 expandtab
