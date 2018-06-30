@@ -26,7 +26,7 @@ require 'net/ssh'
 require 'net/scp'
 require 'fileutils'
 
-VERSION = "0.0.4"
+VERSION = "0.0.5"
 
 # const
 $gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false}
