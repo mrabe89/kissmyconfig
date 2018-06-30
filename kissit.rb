@@ -24,11 +24,12 @@ require 'readline'
 require 'pry-rescue'
 require 'net/ssh'
 require 'net/scp'
+require 'fileutils'
 
 VERSION = "0.0.4"
 
 # const
-$gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false}
+$gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false}
 $desc = nil
 $default_subtasks = "prep:install:config"
 
@@ -46,6 +47,7 @@ class KissItHost < KissIt
 
 	def set(hostname, hostdesc)
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
+		@cfg[:backupdir] = "./kissit.backup/#{@cfg[:hostname]}/#{Time.now.strftime("%d%m%Y_%H%M%S")}"
 		@cache = {homedirs: {}}
 		@wants = []
 		@exec_finish = []
@@ -80,7 +82,6 @@ class KissItHost < KissIt
 		return @cache[:homedirs][username] if @cache[:homedirs][username]
 
 		_, dir = exec("echo ~#{username}", {ret_output: 1})
-
 		@cache[:homedirs][username] = dir.strip
 		return @cache[:homedirs][username]
 	end
@@ -101,6 +102,14 @@ class KissItHost < KissIt
 
 	def cp(data, remotefname)
 		connect() if not @connections[:default]
+
+		if $gvars[:backup]
+			dir = File.dirname(remotefname)
+			# hopefully we'll catch some 'mistakes' this way
+			backup = @cfg[:backupdir] + (dir[0].chr != "/" ? "/" : "") + dir + "/" + File.basename(remotefname)
+			@connections[:default].backup(backup, remotefname)
+		end
+
 		@connections[:default].cp(data, remotefname)
 	end
 
@@ -352,7 +361,8 @@ class KissItConnection < KissIt
 	# connect(host);
 	# disconnect();
 	# exec_do(cmd, opts= nil);
-	# def cp(data, remotefname);
+	# cp(data, remotefname);
+	# backup(localfname, remotefname);
 
 	def exec(cmd, opts= nil)
 		cmd = cmd.to_s.dup
@@ -377,6 +387,11 @@ class KissItConnection < KissIt
 		end
 
 		return ret + data
+	end
+
+	def mkdir_backupdir(localfname)
+		dir = File.dirname(localfname)
+		FileUtils.mkdir_p(dir) unless File.exists?(dir)
 	end
 end
 
@@ -404,6 +419,15 @@ class KissItConnectionLocal < KissItConnection
 		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}" if opts[:hide].to_i != 1
 
 		return ret, exit_code
+	end
+
+	def backup(localfname, remotefname)
+		return if not File.exist? remotefname
+
+		mkdir_backupdir(localfname)
+		$stderr.puts "     Backing up to #{localfname}"
+		File.open(localfname, "w") {|f| f.write(File.read(remotefname)) }
+		return true
 	end
 
 	def cp(data, remotefname)
@@ -447,6 +471,14 @@ class KissItConnectionSSH < KissItConnection
 		return ret, status[:exit_code]
 	end
 
+	def backup(localfname, remotefname)
+		return if exec("test -e '#{remotefname}'", {hide: 1, error_is_ok: 1}) != 0
+
+		mkdir_backupdir(localfname)
+		@ssh.scp.download! remotefname, localfname
+		return true
+	end
+
 	def cp(data, remotefname)
 		@ssh.scp.upload! StringIO.new(data), remotefname
 	end
@@ -461,6 +493,7 @@ def usage(ex= nil)
 	$stderr.puts "  -V, --verbose			print additional debug output"
 	$stderr.puts "      --debug-tasks		sets a break point at the beginning and end tasks"
 	$stderr.puts "      --refmt			prints reformated yml to stdout and exits"
+	$stderr.puts "      --backup			back remote files up, before writing"
 	$stderr.puts "  -?, --help			show this message"
 	$stderr.puts "      --version			display version information"
 	exit ex unless ex.nil?
@@ -479,6 +512,7 @@ def process_args()
 		[ "--verbose",	"-V",	GetoptLong::NO_ARGUMENT ],
 		[ "--debug-tasks",	GetoptLong::NO_ARGUMENT ],
 		[ "--refmt",		GetoptLong::NO_ARGUMENT ],
+		[ "--backup",		GetoptLong::NO_ARGUMENT ],
 		[ "--help",	"-?",	GetoptLong::NO_ARGUMENT ],
 		[ "--version",		GetoptLong::NO_ARGUMENT ],
 	)
@@ -488,20 +522,14 @@ def process_args()
 
 		opts.each do | opt, arg |
 			case opt
-			when "--force"
-				$gvars[:force] = true
-			when "--no-verify"
-				$gvars[:verify] = false
-			when "--verbose"
-				$gvars[:verbose] = true
-			when "--debug-tasks"
-				$gvars[:debug_tasks] = true
-			when "--refmt"
-				$gvars[:refmt] = true
-			when "--help"
-				usage(0)
-			when "--version"
-				version()
+			when "--force"		then $gvars[:force]		= true
+			when "--no-verify"	then $gvars[:verify]		= false
+			when "--verbose"	then $gvars[:verbose]		= true
+			when "--debug-tasks"	then $gvars[:debug_tasks]	= true
+			when "--refmt"		then $gvars[:refmt]		= true
+			when "--backup"		then $gvars[:backup]		= true
+			when "--help"		then usage(0)
+			when "--version"	then version()
 			else
 				raise "NYI"
 			end
