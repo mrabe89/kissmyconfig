@@ -48,7 +48,7 @@ class KissItHost < KissIt
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
 		@cache = {homedirs: {}}
 		@wants = []
-		@connection = nil
+		@connections = {local: nil, remote: nil, default: nil}
 
 		hostdesc.each {|hostdefname, hostdefval|
 			case hostdefname
@@ -85,26 +85,28 @@ class KissItHost < KissIt
 	end
 
 	def exec(cmd, opts= {})
-		connect() if not @connection
-		@connection.exec(cmd, opts)
-	end
-
-	def cp(data, remotefname)
-		connect() if not @connection
-		@connection.cp(data, remotefname)
-	end
-
-	def connect()
-		if not @cfg[:ip]
-			@connection = KissItConnectionLocal.new.connect(self)
+		connect() if not @connections[:default]
+		if cmd[0].chr != "!"
+			@connections[:default].exec(cmd, opts)
 		else
-			@connection = KissItConnectionSSH.new.connect(self)
+			@connections[:local].exec(cmd[1..-1], opts)
 		end
 	end
 
+	def cp(data, remotefname)
+		connect() if not @connections[:default]
+		@connections[:default].cp(data, remotefname)
+	end
+
+	def connect()
+		@connections[:local] = KissItConnectionLocal.new.connect(self)
+		@connections[:remote] = KissItConnectionSSH.new.connect(self) if @cfg[:ip]
+		@connections[:default] = @connections[:remote] || @connections[:local]
+	end
+
 	def disconnect()
-		@connection.disconnect()
-		@connection = nil
+		[:local, :remote].each {|c| @connections[c].disconnect() if @connections[c] }
+		@connections = {local: nil, remote: nil, default: nil}
 	end
 end
 
