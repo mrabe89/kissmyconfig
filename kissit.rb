@@ -25,7 +25,7 @@ require 'pry-rescue'
 require 'net/ssh'
 require 'net/scp'
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 # const
 $gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false}
