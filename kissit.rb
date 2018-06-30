@@ -359,8 +359,8 @@ class KissItConnection < KissIt
 		cmd = "sudo -u #{@parent.sudo} " + cmd if @parent.sudo
 		opts ||= {}
 
-		$stderr.puts "     exec: #{cmd.inspect}"
-		ret, exit_code = exec_native(cmd)
+		$stderr.puts "     exec: #{cmd.inspect}" if opts[:hide].to_i != 1
+		ret, exit_code = exec_native(cmd, opts)
 
 		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{exit_code}"; exit 1) \
 				if (not exit_code.zero?) and opts[:error_is_ok].to_i == 0
@@ -369,8 +369,8 @@ class KissItConnection < KissIt
 		return exit_code
 	end
 
-	def exec_disp(ret, data)
-		if not data.empty?
+	def exec_disp(ret, data, opts)
+		if not data.empty? and opts[:hide].to_i != 1
 			$stderr.print "     > " if ret.empty?
 			$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
 			$stderr.print data.rstrip.gsub("\n", "\n       ")
@@ -396,12 +396,12 @@ class KissItConnectionLocal < KissItConnection
 
 		IO.popen(cmd) do |io|
 			while data = io.gets
-				ret = exec_disp(ret, data)
+				ret = exec_disp(ret, data, opts)
 			end
 			io.close
 			exit_code = $?.to_i
 		end
-		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}"
+		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}" if opts[:hide].to_i != 1
 
 		return ret, exit_code
 	end
@@ -430,9 +430,9 @@ class KissItConnectionSSH < KissItConnection
 
 		begin
 			@ssh.exec!(cmd, status: status) do |channel, stream, data|
-				ret = exec_disp(ret, data)
+				ret = exec_disp(ret, data, opts)
 			end
-			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}"
+			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}" if opts[:hide].to_i != 1
 
 		rescue IOError => e
 			if opts[:flags].include? :will_lose_connection
