@@ -46,6 +46,7 @@ class KissItHost < KissIt
 
 	def set(hostname, hostdesc)
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
+		@cache = {homedirs: {}}
 		@wants = []
 		@connection = nil
 
@@ -72,6 +73,15 @@ class KissItHost < KissIt
 		}
 
 		return self
+	end
+
+	def get_homedir(username= user)
+		return @cache[:homedirs][username] if @cache[:homedirs][username]
+
+		_, dir = exec("echo ~#{username}", {ret_output: 1})
+
+		@cache[:homedirs][username] = dir.strip
+		return @cache[:homedirs][username]
 	end
 
 	def exec(cmd, opts= {})
@@ -269,11 +279,11 @@ class KissItTaskSubFile < KissIt
 
 	def get_remotefname(host, args)
 		fname = @parent.complete_cmd(host, args, @cfg[:dest])
-		fname.gsub!("~/", ((host.user == "root") ? "/root/" : "/home/#{host.user}/"))
+		fname.gsub!("~/", host.get_homedir() + "/")
 
 		match = fname.scan(/~([^ \/]+)/)
 		match.each {|m| m = m[0];
-			fname.gsub!("~#{m}/", ((m == "root") ? "/root/" : "/home/#{m}/"))
+			fname.gsub!("~#{m}/", host.get_homedir(m) + "/")
 		}
 
 		return fname
@@ -411,7 +421,7 @@ class KissItConnectionSSH < KissItConnection
 		rescue IOError => e
 			if opts[:flags].include? :will_lose_connection
 				$stderr.puts "       ### Connection lost - but was expected"
-				return ["", 0] if opts[:ret_output].to_i == 1
+				return [0, ""] if opts[:ret_output].to_i == 1
 				return 0
 			else
 				raise e
