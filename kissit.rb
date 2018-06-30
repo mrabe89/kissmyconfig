@@ -48,6 +48,7 @@ class KissItHost < KissIt
 		@cfg = {hostname: hostname, ip: nil, password: nil, user: nil, sudo: nil}
 		@cache = {homedirs: {}}
 		@wants = []
+		@exec_finish = []
 		@connections = {local: nil, remote: nil, default: nil}
 
 		hostdesc.each {|hostdefname, hostdefval|
@@ -86,10 +87,15 @@ class KissItHost < KissIt
 
 	def exec(cmd, opts= {})
 		connect() if not @connections[:default]
-		if cmd[0].chr != "!"
-			@connections[:default].exec(cmd, opts)
-		else
-			@connections[:local].exec(cmd[1..-1], opts)
+		case cmd[0].chr
+			when "!" then @connections[:local].exec(cmd[1..-1], opts)
+			when "?" then
+				ret = @connections[:default].exec(cmd[1..-1], (opts || {}).merge(error_is_ok: 1))
+				if not ret.zero?
+					$stderr.puts "     # failed, but was expected (will try again at the end)"
+					@exec_finish.push(cmd[1..-1]) if not @exec_finish.include? cmd[1..-1]
+				end
+			else @connections[:default].exec(cmd, opts)
 		end
 	end
 
@@ -107,6 +113,14 @@ class KissItHost < KissIt
 	def disconnect()
 		[:local, :remote].each {|c| @connections[c].disconnect() if @connections[c] }
 		@connections = {local: nil, remote: nil, default: nil}
+	end
+
+	def finish()
+		if not @exec_finish.size.zero?
+			$stderr.puts "  ### Finish Up (try failed cmds again)"
+			@exec_finish.each {|cmd| exec(cmd) }
+			@exec_finish = []
+		end
 	end
 end
 
@@ -554,6 +568,8 @@ def hndl_host(host)
 			hndl_task(host, taskname[0], taskname[1..-1])
 		}
 	end
+
+	host.finish()
 
 	host.disconnect()
 end
