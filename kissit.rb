@@ -87,12 +87,12 @@ class KissItHost < KissIt
 		return @cache[:homedirs][username]
 	end
 
-	def exec(cmd, opts= {})
+	def exec(cmd, opts= [])
 		connect() if not @connections[:default]
 		case cmd[0].chr
 			when "!" then @connections[:local].exec(cmd[1..-1], opts)
 			when "?" then
-				ret = @connections[:default].exec(cmd[1..-1], (opts || {}).merge(error_is_ok: 1))
+				ret = @connections[:default].exec(cmd[1..-1], (opts || []).append(:error_is_ok))
 				if not ret.zero?
 					$stderr.puts "     # failed, but was expected (will try again at the end)"
 					@exec_finish.push(cmd[1..-1]) if not @exec_finish.include? cmd[1..-1]
@@ -251,7 +251,7 @@ class KissItTaskSub < KissIt
 
 		if @desc[:state]
 			@desc[:state].each {|cmd|
-				ret = host.exec(complete_cmd(host, args, cmd), {error_is_ok: 1})
+				ret = host.exec(complete_cmd(host, args, cmd), [:error_is_ok])
 				break if not ret.zero?
 			}
 		end
@@ -263,7 +263,8 @@ class KissItTaskSub < KissIt
 		end
 
 		($stderr.puts "   ### Nothing to do"; return :skip) if preck and ret.zero?
-		($stderr.puts "!!!!!! FAILED : state condition not satisfied after completion"; exit 1) if not preck and not ret.zero?
+		($stderr.puts "!!!!!! FAILED : state condition not satisfied after completion"; exit 1) \
+				if not preck and not ret.zero?
 
 		return :ok
 	end
@@ -345,7 +346,7 @@ class KissItTaskSubFile < KissIt
 
 	def needs2run?(host, args)
 		md5_local = Digest::MD5.hexdigest(get_data(host, args))
-		ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args)}'", {error_is_ok: 1, ret_output: 1});
+		ret, md5_remote = host.exec("md5sum '#{get_remotefname(host, args)}'", [:error_is_ok, :ret_output])
 
 		verbose("     ### #{md5_local}")
 		verbose("     ### #{md5_remote}")
@@ -389,20 +390,20 @@ class KissItConnection < KissIt
 	def exec(cmd, opts= nil)
 		cmd = cmd.to_s.dup
 		cmd = "sudo -u #{@parent.sudo} " + cmd if @parent.sudo
-		opts ||= {}
+		opts ||= []
 
-		$stderr.puts "     exec: #{cmd.inspect}" if opts[:hide].to_i != 1
-		ret, exit_code = exec_native(cmd, opts)
+		$stderr.puts "     exec: #{cmd.inspect}" if not opts.include? :hide
+		exit_code, ret = exec_native(cmd, opts)
 
 		($stderr.puts "!!!!!!!! FAILED: #{cmd} returned code:#{exit_code}"; exit 1) \
-				if (not exit_code.zero?) and opts[:error_is_ok].to_i == 0
+				if (not exit_code.zero?) and (not opts.include? :error_is_ok)
 
-		return [exit_code, ret.to_s] if opts[:ret_output].to_i == 1
+		return [exit_code, ret.to_s] if opts.include? :ret_output
 		return exit_code
 	end
 
 	def exec_disp(ret, data, opts)
-		if not data.empty? and opts[:hide].to_i != 1
+		if not data.empty? and (not opts.include? :hide)
 			$stderr.print "     > " if ret.empty?
 			$stderr.print "\n       " if (not ret.empty?) and data[-1] == "\n"
 			$stderr.print data.rstrip.gsub("\n", "\n       ")
@@ -438,9 +439,9 @@ class KissItConnectionLocal < KissItConnection
 			io.close
 			exit_code = $?.to_i
 		end
-		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}" if opts[:hide].to_i != 1
+		$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{exit_code}" if (not opts.include? :hide)
 
-		return ret, exit_code
+		return exit_code, ret
 	end
 
 	def backup(localfname, remotefname)
@@ -466,7 +467,7 @@ class KissItConnectionSSH < KissItConnection
 	end
 
 	def disconnect()
-		@ssh.close
+		@ssh.close if @ssh
 		@ssh = nil
 	end
 
@@ -478,23 +479,24 @@ class KissItConnectionSSH < KissItConnection
 			@ssh.exec!(cmd, status: status) do |channel, stream, data|
 				ret = exec_disp(ret, data, opts)
 			end
-			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}" if opts[:hide].to_i != 1
+			$stderr.puts "#{"\n" if ret[-1] == "\n"}     # returned: #{status[:exit_code]}" \
+					if (not opts.include? :hide)
 
 		rescue IOError => e
-			if opts[:flags].include? :will_lose_connection
+			if opts.include? :will_lose_connection
 				$stderr.puts "       ### Connection lost - but was expected"
-				return [0, ""] if opts[:ret_output].to_i == 1
-				return 0
+				@ssh = nil
+				return [0, ""]
 			else
 				raise e
 			end
 		end
 
-		return ret, status[:exit_code]
+		return status[:exit_code], ret
 	end
 
 	def backup(localfname, remotefname)
-		return false if exec("test -e '#{remotefname}'", {hide: 1, error_is_ok: 1}) != 0
+		return false if exec("test -e '#{remotefname}'", [:hide, :error_is_ok]) != 0
 
 		mkdir_backupdir(localfname)
 		@ssh.scp.download! remotefname, localfname
