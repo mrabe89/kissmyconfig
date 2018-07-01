@@ -17,19 +17,20 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-require 'getoptlong'
 require 'erb'
-require 'yaml'
-require 'readline'
-require 'pry-rescue'
+require 'fileutils'
+require 'getoptlong'
 require 'net/ssh'
 require 'net/scp'
-require 'fileutils'
+require 'pry-rescue'
+require 'readline'
+require 'tempfile'
+require 'yaml'
 
 VERSION = "0.0.5"
 
 # const
-$gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false}
+$gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false, diff: false}
 $desc = nil
 $default_subtasks = "prep:install:config"
 
@@ -108,6 +109,27 @@ class KissItHost < KissIt
 			# hopefully we'll catch some 'mistakes' this way
 			backup = @cfg[:backupdir] + (dir[0].chr != "/" ? "/" : "") + dir + "/" + File.basename(remotefname)
 			@connections[:default].backup(backup, remotefname)
+
+			if $gvars[:diff]
+				tmpfile = Tempfile.new("kissit")
+				begin
+					tmpfile.write data
+					tmpfile.close
+					diff = `diff -N -c '#{backup}' '#{tmpfile.path}'`
+				ensure
+					tmpfile.unlink
+				end
+
+				if not diff.strip.empty?
+					$stderr.puts "################################## Diff ##################################"
+					$stderr.puts diff
+
+					input = ""; while not ["y", "yes"].include? input
+						input = [(print 'Continue (y/n) '), $stdin.gets.rstrip][1]
+						exit if ["n", "no"].include? input
+					end
+				end
+			end
 		end
 
 		@connections[:default].cp(data, remotefname)
@@ -422,7 +444,7 @@ class KissItConnectionLocal < KissItConnection
 	end
 
 	def backup(localfname, remotefname)
-		return if not File.exist? remotefname
+		return false if not File.exist? remotefname
 
 		mkdir_backupdir(localfname)
 		$stderr.puts "     Backing up to #{localfname}"
@@ -472,7 +494,7 @@ class KissItConnectionSSH < KissItConnection
 	end
 
 	def backup(localfname, remotefname)
-		return if exec("test -e '#{remotefname}'", {hide: 1, error_is_ok: 1}) != 0
+		return false if exec("test -e '#{remotefname}'", {hide: 1, error_is_ok: 1}) != 0
 
 		mkdir_backupdir(localfname)
 		@ssh.scp.download! remotefname, localfname
@@ -494,6 +516,7 @@ def usage(ex= nil)
 	$stderr.puts "      --debug-tasks		sets a break point at the beginning and end tasks"
 	$stderr.puts "      --refmt			prints reformated yml to stdout and exits"
 	$stderr.puts "      --backup			back remote files up, before writing"
+	$stderr.puts "      --diff			verify diff before writing (enables --backup)"
 	$stderr.puts "  -?, --help			show this message"
 	$stderr.puts "      --version			display version information"
 	exit ex unless ex.nil?
@@ -513,6 +536,7 @@ def process_args()
 		[ "--debug-tasks",	GetoptLong::NO_ARGUMENT ],
 		[ "--refmt",		GetoptLong::NO_ARGUMENT ],
 		[ "--backup",		GetoptLong::NO_ARGUMENT ],
+		[ "--diff",		GetoptLong::NO_ARGUMENT ],
 		[ "--help",	"-?",	GetoptLong::NO_ARGUMENT ],
 		[ "--version",		GetoptLong::NO_ARGUMENT ],
 	)
@@ -522,14 +546,16 @@ def process_args()
 
 		opts.each do | opt, arg |
 			case opt
-			when "--force"		then $gvars[:force]		= true
-			when "--no-verify"	then $gvars[:verify]		= false
-			when "--verbose"	then $gvars[:verbose]		= true
-			when "--debug-tasks"	then $gvars[:debug_tasks]	= true
-			when "--refmt"		then $gvars[:refmt]		= true
-			when "--backup"		then $gvars[:backup]		= true
-			when "--help"		then usage(0)
-			when "--version"	then version()
+			when "--force"		then	$gvars[:force]		= true
+			when "--no-verify"	then	$gvars[:verify]		= false
+			when "--verbose"	then	$gvars[:verbose]	= true
+			when "--debug-tasks"	then	$gvars[:debug_tasks]	= true
+			when "--refmt"		then	$gvars[:refmt]		= true
+			when "--backup"		then	$gvars[:backup]		= true
+			when "--diff"		then	$gvars[:backup]		= true
+							$gvars[:diff]		= true
+			when "--help"		then	usage(0)
+			when "--version"	then	version()
 			else
 				raise "NYI"
 			end
