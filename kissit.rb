@@ -27,7 +27,7 @@ require 'readline'
 require 'tempfile'
 require 'yaml'
 
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 
 # const
 $gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false, diff: false}
