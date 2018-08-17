@@ -20,13 +20,6 @@ tasks:
         - (($apt-get dist-upgrade
         - (($apt-get autoremove
 
-  reboot:
-    config:
-      pre: shutdown -r now
-      flags:
-        - :will_lose_connection
-        - :sleep_30
-
   installpkg:
     install:
       state: dpkg -s %ARG0% &>/dev/null

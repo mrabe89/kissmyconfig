@@ -1,0 +1,49 @@
+---
+tasks:
+  set_hostname:
+    config:
+      state: grep %ARG0% /etc/hostname
+      pre: echo %ARG0% > /etc/hostname
+
+  set_locale:
+    config:
+      state: grep %ARG0% /etc/locale.conf
+      pre:
+        - echo LANG=%ARG0% > /etc/locale.conf
+        - echo KEYMAP=%ARG1% > /etc/vconsole.conf
+        - ln -sf /usr/share/zoneinfo/%ARG2% /etc/localtime
+
+  passwd:
+    config:
+      pre: echo "%ARG0%:%ARG1%" | chpasswd
+
+  user:
+    config:
+      state: id %ARG0%
+      pre:
+        - useradd %ARG0% -m -g users -G users%ARG2%
+        - echo "%ARG0%:%ARG1%" | chpasswd
+
+  ping:
+    config:
+      pre: echo "pong"
+
+  whoami:
+    config:
+      pre: whoami
+
+  reboot:
+    config:
+      pre: shutdown -r now
+      flags:
+        - :will_lose_connection
+        - :sleep_30
+
+  poweroff:
+    config:
+      pre: shutdown -h now
+      flags:
+        - :will_lose_connection
+
+# vim: syntax=yaml ts=2 sw=2 expandtab
+
