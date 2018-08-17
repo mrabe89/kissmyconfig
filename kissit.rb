@@ -32,7 +32,7 @@ VERSION = "0.0.7"
 # const
 $gvars = {verbose: false, force: false, verify: true, debug_tasks: false, refmt: false, backup: false, diff: false}
 $desc = nil
-$default_subtasks = "prep:install:config"
+$default_subtasks = ["prep", "install", "config"]
 
 # class
 class KissIt
@@ -165,17 +165,17 @@ class KissItTask < KissIt
 
 		taskdesc.each {|subtaskname, subtaskdesc|
 			raise "subtaskname #{subtaskname} not allowed (in #{taskname})" \
-					if not $gvars[:subtasks].include? subtaskname
+					if not $default_subtasks.include? subtaskname
 			@subs[subtaskname.to_sym] = KissItTaskSub.new.set(self, subtaskname, subtaskdesc)
 		}
 
 		return self
 	end
 
-	def exec(host, args = [])
+	def exec(host, args = [], subtasks = $gvars[:subtasks])
 		binding.pry if $gvars[:debug_tasks]
 
-		$gvars[:subtasks].each {|subtask| subtask = subtask.to_sym
+		subtasks.each {|subtask| subtask = subtask.to_sym
 			next if @subs[subtask].nil?
 			@subs[subtask].exec(host, args)
 		}
@@ -511,7 +511,7 @@ end
 # func
 def usage(ex= nil)
 	$stderr.puts "Usage: #{$0} [options] descfile <hostname or *> <task or *> <subtasks>"
-	$stderr.puts "  subtasks default: #{$default_subtasks}"
+	$stderr.puts "  subtasks default: #{$default_subtasks.join(":")}"
 	$stderr.puts "  -f, --force			force execution / ignore state"
 	$stderr.puts "  -n, --no-verify			don't verify completion with state"
 	$stderr.puts "  -V, --verbose			print additional debug output"
@@ -570,7 +570,7 @@ def process_args()
 	$gvars[:yml] = ARGV[0]
 	$gvars[:hostname] = ARGV[1] || "*"
 	$gvars[:taskname] = ARGV[2] || "*"
-	$gvars[:subtasks] = (ARGV[3] || $default_subtasks).split(':')
+	$gvars[:subtasks] = (ARGV[3] ? ARGV[3].split(':') : $default_subtasks)
 end
 
 def load_yml()
@@ -583,7 +583,10 @@ def validate_yml(desc)
 	($stdout.puts YAML.dump(desc); exit 0) if $gvars[:refmt]
 
 	desc["include"].each {|inc|
+		$stderr.puts "loading #{inc}"
+
 		data = YAML.load_file(inc)
+
 		desc["hosts"].merge!(data["hosts"] || {})
 		desc["tasks"].merge!(data["tasks"] || {})
 		desc["macros"].merge!(data["macros"] || {})
@@ -631,6 +634,15 @@ def hndl_host(host)
 end
 
 def hndl_task(host, taskname, args = [])
+	# host can want only specific subtasks
+	taskname, subtasks = taskname.split(":")
+
+	if subtasks.nil?
+		subtasks = $gvars[:subtasks]
+	else
+		subtasks = [subtasks] if subtasks.kind_of? String
+	end
+
 	# execute task for each value in array
 	args.each_with_index {|arg, i|
 		if arg.class == Array
@@ -643,7 +655,7 @@ def hndl_task(host, taskname, args = [])
 	}
 
 	raise "task #{taskname.inspect} wanted by #{host.hostname.inspect} unknown" if $desc["tasks"][taskname].nil?
-	$desc["tasks"][taskname].exec(host, args)
+	$desc["tasks"][taskname].exec(host, args, subtasks)
 end
 
 def verbose(msg)
