@@ -2,6 +2,8 @@
 macros:
   pacman: pacman --noconfirm
   installpkg: pacman -S --noconfirm
+  yay: yay --noconfirm
+  installyay: yay -S --noconfirm
 
 tasks:
   sysupdate:
@@ -12,5 +14,23 @@ tasks:
     install:
       state: (($pacman -Qi %ARG0% >/dev/null
       pre: (($installpkg  %ARG0%
+
+  installyay:
+    install:
+      state: (($yay -Qi %ARG0% >/dev/null
+      pre: (($installyay  %ARG0%
+
+  makepkg:
+    install:
+      state: test -e /usr/bin/%ARG0%
+      pre:
+        - mkdir -p /tmp/mp_%ARG0%
+        - cd /tmp/mp_%ARG0% && curl '%ARG2%' -o pkg.tgz && tar xzf pkg.tgz && rm pkg.tgz
+        - mv /tmp/mp_%ARG0%/%ARG1%/* /tmp/mp_%ARG0%/
+        - chown -R nobody /tmp/mp_%ARG0%
+        - cd /tmp/mp_%ARG0% && su nobody -s /bin/bash -c 'makepkg'
+        - (($pacman -U /tmp/mp_%ARG0%/%ARG1%*.xz
+      post:
+        - rm -rf /tmp/mp_%ARG0%
 
 # vim: syntax=yaml ts=2 sw=2 expandtab
