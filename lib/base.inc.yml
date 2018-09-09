@@ -9,6 +9,8 @@ tasks:
     config:
       state: grep %ARG0% /etc/locale.conf
       pre:
+        - echo %ARG0% >> /etc/locale.gen
+        - locale-gen
         - echo LANG=%ARG0% > /etc/locale.conf
         - echo KEYMAP=%ARG1% > /etc/vconsole.conf
         - ln -sf /usr/share/zoneinfo/%ARG2% /etc/localtime
