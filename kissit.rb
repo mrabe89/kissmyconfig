@@ -92,7 +92,7 @@ class KissItHost < KissIt
 		case cmd[0].chr
 			when "!" then @connections[:local].exec(cmd[1..-1], opts)
 			when "?" then
-				ret = @connections[:default].exec(cmd[1..-1], (opts || []).append(:error_is_ok))
+				ret = @connections[:default].exec(cmd[1..-1], (opts || []) << :error_is_ok)
 				if not ret.zero?
 					$stderr.puts "     # failed, but was expected (will try again at the end)"
 					@exec_finish.push(cmd[1..-1]) if not @exec_finish.include? cmd[1..-1]
