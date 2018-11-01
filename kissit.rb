@@ -186,6 +186,7 @@ class KissItTask < KissIt
 end
 
 class KissItTaskSub < KissIt
+	def taskname;		return @parent.taskname;	end
 	def subtaskname;	return @cfg[:subtaskname];	end
 
 	def set(parent, subtaskname, subtaskdesc)
@@ -303,6 +304,9 @@ class KissItTaskSub < KissIt
 end
 
 class KissItTaskSubFile < KissIt
+	def taskname;		return @parent.taskname;	end
+	def subtaskname;	return @parent.subtaskname;	end
+
 	def set(subtask, fname, dest, user= nil, mod= nil)
 		@cfg= {fname: fname, dest: dest, user: user, mod: mod, erb: false}
 		@data= nil
